@@ -1,0 +1,17 @@
+[Unit]
+Description=Telegram Group Points Bot
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/tg-bot
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/tg-bot/src
+ExecStart=/opt/tg-bot/.venv/bin/python -m main
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=TG Group Points Bot
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/tg-group-points-bot
+EnvironmentFile=/opt/tg-group-points-bot/.env
+ExecStart=/opt/tg-group-points-bot/.venv/bin/python -m src.main
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/tg-group-points-bot.log
+StandardError=append:/var/log/tg-group-points-bot.log
+
+[Install]
+WantedBy=multi-user.target

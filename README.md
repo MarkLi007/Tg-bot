@@ -1,12 +1,90 @@
-# Tg-bot# TG Group Points Bot
+# TG Group Points Bot
 
-群组积分机器人：消息 +1 分、每日签到 +10 分、支持 /me /rank /top。
+Track chat activity, award points for messages, and offer daily sign-ins for your Telegram groups.
 
-## 快速开始
-1. 在 BotFather 关闭隐私模式（/setprivacy → Disable），把机器人拉入群。
-2. 复制 `.env.example` 为 `.env` 并填入 `TELEGRAM_TOKEN`。
-3. 本地运行：
+## Quick start
+1. Disable privacy mode in BotFather (`/setprivacy → Disable`) and add the bot to your group.
+2. Copy `.env.example` to `.env` and set `TELEGRAM_TOKEN`.
+3. Run locally:
    ```bash
    python -m venv .venv && source .venv/bin/activate
    pip install -r requirements.txt
    make run
+   ```
+4. Or start with Docker:
+   ```bash
+   docker compose up -d
+   ```
+
+## Available commands
+- `/start` – show help and configuration
+- `/me` – view your score summary
+- `/rank` – check your leaderboard position
+- `/top` – display the top 10 members
+- `/signin` – daily sign-in (UTC based)
+
+### Example output
+```
+/top
+🏆 *Leaderboard*
+🥇 @Alice — *50* pts / 120 msgs
+🥈 @Bob — *40* pts / 98 msgs
+3. Charlie — *30* pts / 64 msgs
+```
+
+## Configuration
+| Variable | Description | Default |
+| -------- | ----------- | ------- |
+| `TELEGRAM_TOKEN` | Telegram Bot token (required) | – |
+| `DB_PATH` | SQLite database path | `points.db` |
+| `MESSAGE_POINT` | Points per text message | `1` |
+| `DAILY_SIGNIN_BONUS` | Points granted on `/signin` | `10` |
+| `THROTTLE_SECONDS` | Cooldown window for message scoring | `5` |
+| `LANG` | Interface language | `en` |
+| `ALLOWED_CHAT_IDS` | Comma-separated chat IDs whitelist | – |
+
+## Development helpers
+- `make run` – start the bot
+- `make fmt` – format code with ruff
+- `make lint` – lint with ruff
+- `make test` – run pytest suite
+
+## Project structure
+```
+tg-group-points-bot/
+├─ src/
+│  ├─ bot/
+│  │  ├─ __init__.py
+│  │  ├─ app.py
+│  │  ├─ handlers.py
+│  │  ├─ lang.py
+│  │  ├─ models.py
+│  │  ├─ settings.py
+│  │  ├─ storage.py
+│  │  └─ utils.py
+│  └─ main.py
+├─ .env.example
+├─ requirements.txt
+├─ README.md
+├─ LICENSE
+├─ Dockerfile
+├─ docker-compose.yml
+├─ Makefile
+├─ pyproject.toml
+└─ .github/
+   ├─ ISSUE_TEMPLATE/
+   │  ├─ feature_request.md
+   │  ├─ bug_report.md
+   │  └─ task.md
+   └─ workflows/
+      └─ ci.yml
+```
+
+## BotFather command menu
+```
+start - show help
+me - view my score
+rank - check my leaderboard position
+top - show the top members
+signin - daily sign-in (+10 pts, once per day)
+```
