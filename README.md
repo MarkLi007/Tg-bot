@@ -43,6 +43,14 @@ Track chat activity, award points for messages, and offer daily sign-ins for you
 | `LANG` | Interface language | `en` |
 | `ALLOWED_CHAT_IDS` | Comma-separated chat IDs whitelist | – |
 
+### Logging & deployment
+- Logs are emitted as single-line JSON records that include the log level, timestamp, and
+  frequently used identifiers (`chat_id`, `user_id`, `points`). Pipe the bot output into your
+  preferred log processor for storage or alerts.
+- A sample `systemd` unit is provided at `deploy/tg-bot.service`. Copy it to
+  `/etc/systemd/system/tg-bot.service`, adjust the working directory and Python path, then run
+  `sudo systemctl enable --now tg-bot` to keep the bot running in the background.
+
 ## Development helpers
 - `make run` – start the bot
 - `make fmt` – format code with ruff
