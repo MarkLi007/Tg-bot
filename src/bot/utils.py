@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
+import html
 import time
-
-from . import models
 
 
 class Throttle:
@@ -30,28 +29,19 @@ class Throttle:
         self._last_seen.pop(key, None)
 
 
-def mention_from_row(score: models.Score) -> str:
-    """Return a Markdown-safe mention for the provided score row."""
-    if score.username:
-        return f"[@{score.username}](tg://user?id={score.user_id})"
-    name_parts = [part for part in (score.first_name, score.last_name) if part]
-    if name_parts:
-        return _escape_markdown(" ".join(name_parts))
-    return f"User {score.user_id}"
+def html_escape(value: str | None) -> str:
+    """Escape a string for safe HTML output."""
+    return html.escape(value or "", quote=True)
 
 
-def display_name(score: models.Score) -> str:
-    """Return a readable name for the user suitable for Markdown output."""
-    name_parts = [part for part in (score.first_name, score.last_name) if part]
-    if score.username:
-        return f"@{score.username}"
-    if name_parts:
-        return _escape_markdown(" ".join(name_parts))
-    return f"User {score.user_id}"
-
-
-def _escape_markdown(value: str) -> str:
-    """Escape characters that are special in Telegram Markdown."""
-    for ch in ("_", "*", "[", "]", "(", ")"):
-        value = value.replace(ch, f"\\{ch}")
-    return value
+def mention_from_row_html(
+    user_id: int, username: str | None, first: str | None, last: str | None
+) -> str:
+    """Return a clickable HTML mention for leaderboard rows."""
+    if username:
+        display = f"@{username}"
+    else:
+        parts = [part for part in (first, last) if part]
+        display = " ".join(parts).strip() or f"User {user_id}"
+    display = html_escape(display)
+    return f'<a href="tg://user?id={user_id}">{display}</a>'

@@ -1,19 +1,11 @@
-"""CLI entrypoint for running the bot."""
+"""Entry point for running the Telegram bot."""
 
 from __future__ import annotations
 
-import logging
+import asyncio
 
 from bot.app import create_application
 
-
-def main() -> None:
-    """Start the telegram bot."""
-    application = create_application()
-    logger = logging.getLogger(__name__)
-    logger.info("Bot is running...")
-    application.run_polling()
-
-
 if __name__ == "__main__":
-    main()
+    application = asyncio.run(create_application())
+    application.run_polling(allowed_updates=None, drop_pending_updates=True)

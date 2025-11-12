@@ -1,193 +1,192 @@
-"""Async SQLite storage helpers for the points bot."""
+"""Async SQLite helpers for the Telegram points bot."""
 
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from typing import AsyncIterator, Iterable
 
 import aiosqlite
-from telegram import User as TelegramUser
 
-from . import models
+from .settings import DB_PATH
+
+INIT_SQL = """
+PRAGMA journal_mode=WAL;
+CREATE TABLE IF NOT EXISTS scores(
+  user_id INTEGER NOT NULL,
+  chat_id INTEGER NOT NULL,
+  points INTEGER NOT NULL DEFAULT 0,
+  message_cnt INTEGER NOT NULL DEFAULT 0,
+  last_signin TEXT,
+  PRIMARY KEY(user_id, chat_id)
+);
+CREATE INDEX IF NOT EXISTS idx_scores_chat_points ON scores(chat_id, points DESC);
+CREATE TABLE IF NOT EXISTS users(
+  user_id INTEGER NOT NULL,
+  chat_id INTEGER NOT NULL,
+  first_name TEXT,
+  last_name  TEXT,
+  username   TEXT,
+  PRIMARY KEY(user_id, chat_id)
+);
+"""
+
+_DB_PATH = DB_PATH
+_INIT_LOCK = asyncio.Lock()
+_INITIALIZED = False
 
 
-class Storage:
-    """Wrapper around SQLite operations using aiosqlite."""
-
-    def __init__(self, db_path: str) -> None:
-        self.db_path = db_path
-        self._init_lock = asyncio.Lock()
-        self._initialized = False
-
-    async def initialize(self) -> None:
-        """Initialize database with WAL mode and required tables."""
-        if self._initialized:
+async def init_db(db_path: str | None = None) -> None:
+    """Initialize the SQLite database if it has not been set up."""
+    global _INITIALIZED, _DB_PATH
+    if db_path is not None and db_path != _DB_PATH:
+        _INITIALIZED = False
+        _DB_PATH = db_path
+    if _INITIALIZED:
+        return
+    async with _INIT_LOCK:
+        if _INITIALIZED:
             return
-        async with self._init_lock:
-            if self._initialized:
-                return
-            async with aiosqlite.connect(self.db_path) as db:
-                await db.execute(models.ENABLE_WAL)
-                await db.execute(models.CREATE_SCORES_TABLE)
-                await db.execute(models.CREATE_USERS_TABLE)
-                await db.commit()
-            self._initialized = True
-
-    async def upsert_user(self, user: TelegramUser, chat_id: int) -> None:
-        """Insert or update basic user information."""
-        await self.initialize()
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """
-                INSERT INTO users (user_id, chat_id, first_name, last_name, username)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(user_id, chat_id) DO UPDATE SET
-                    first_name=excluded.first_name,
-                    last_name=excluded.last_name,
-                    username=excluded.username
-                """,
-                (
-                    user.id,
-                    chat_id,
-                    user.first_name,
-                    user.last_name,
-                    user.username,
-                ),
-            )
+        async with aiosqlite.connect(_DB_PATH) as db:
+            await db.executescript(INIT_SQL)
             await db.commit()
-
-    async def ensure_row(self, user_id: int, chat_id: int) -> None:
-        """Ensure a score row exists for given user and chat."""
-        await self.initialize()
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """
-                INSERT INTO scores (user_id, chat_id, points, message_cnt, last_signin)
-                VALUES (?, ?, 0, 0, NULL)
-                ON CONFLICT(user_id, chat_id) DO NOTHING
-                """,
-                (user_id, chat_id),
-            )
-            await db.commit()
-
-    async def add_message_point(self, user_id: int, chat_id: int, points: int = 1) -> models.Score:
-        """Add points for a user message and return updated score."""
-        await self.ensure_row(user_id, chat_id)
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """
-                UPDATE scores
-                SET points = points + ?, message_cnt = message_cnt + 1
-                WHERE user_id = ? AND chat_id = ?
-                """,
-                (points, user_id, chat_id),
-            )
-            await db.commit()
-        score = await self.get_user_score(user_id, chat_id)
-        if score is None:  # pragma: no cover - safeguard, shouldn't happen
-            raise RuntimeError("Score row missing after add_message_point")
-        return score
-
-    async def signin(self, user_id: int, chat_id: int, bonus: int) -> bool:
-        """Apply a daily sign-in bonus; return True if applied."""
-        await self.ensure_row(user_id, chat_id)
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            async with db.execute(
-                "SELECT last_signin FROM scores WHERE user_id = ? AND chat_id = ?",
-                (user_id, chat_id),
-            ) as cursor:
-                row = await cursor.fetchone()
-        last_signin = _parse_datetime(row["last_signin"]) if row else None
-        today = datetime.now(timezone.utc).date()
-        if last_signin is not None and last_signin.date() == today:
-            return False
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """
-                UPDATE scores
-                SET points = points + ?, last_signin = ?
-                WHERE user_id = ? AND chat_id = ?
-                """,
-                (bonus, datetime.now(timezone.utc).isoformat(), user_id, chat_id),
-            )
-            await db.commit()
-        return True
-
-    async def get_user_score(self, user_id: int, chat_id: int) -> models.Score | None:
-        """Retrieve a user's score information."""
-        await self.initialize()
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            async with db.execute(
-                """
-                SELECT s.user_id, s.chat_id, s.points, s.message_cnt, s.last_signin,
-                       u.first_name, u.last_name, u.username
-                FROM scores AS s
-                LEFT JOIN users AS u ON s.user_id = u.user_id AND s.chat_id = u.chat_id
-                WHERE s.user_id = ? AND s.chat_id = ?
-                """,
-                (user_id, chat_id),
-            ) as cursor:
-                row = await cursor.fetchone()
-        if row is None:
-            return None
-        return _row_to_score(row)
-
-    async def get_rank(self, user_id: int, chat_id: int) -> int | None:
-        """Get rank (1-based) of user in chat by points and message count."""
-        await self.initialize()
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            query = (
-                "SELECT user_id FROM scores WHERE chat_id = ? ORDER BY points DESC,"
-                " message_cnt DESC, user_id ASC"
-            )
-            async with db.execute(query, (chat_id,)) as cursor:
-                rank = 1
-                async for row in cursor:
-                    if row["user_id"] == user_id:
-                        return rank
-                    rank += 1
-        return None
-
-    async def get_top(self, chat_id: int, limit: int = 10) -> list[models.Score]:
-        """Return the top N scores for a chat."""
-        await self.initialize()
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            query = (
-                """
-                SELECT s.user_id, s.chat_id, s.points, s.message_cnt, s.last_signin,
-                       u.first_name, u.last_name, u.username
-                FROM scores AS s
-                LEFT JOIN users AS u ON s.user_id = u.user_id AND s.chat_id = u.chat_id
-                WHERE s.chat_id = ?
-                ORDER BY s.points DESC, s.message_cnt DESC, s.user_id ASC
-                LIMIT ?
-                """
-            )
-            async with db.execute(query, (chat_id, limit)) as cursor:
-                rows = await cursor.fetchall()
-        return [_row_to_score(row) for row in rows]
+        _INITIALIZED = True
 
 
-def _row_to_score(row: aiosqlite.Row) -> models.Score:
-    last_signin = _parse_datetime(row["last_signin"])
-    keys = row.keys()
-    return models.Score(
-        user_id=row["user_id"],
-        chat_id=row["chat_id"],
-        points=row["points"],
-        message_cnt=row["message_cnt"],
-        last_signin=last_signin,
-        first_name=row["first_name"] if "first_name" in keys else None,
-        last_name=row["last_name"] if "last_name" in keys else None,
-        username=row["username"] if "username" in keys else None,
+@asynccontextmanager
+async def get_db() -> AsyncIterator[aiosqlite.Connection]:
+    """Yield an initialized database connection."""
+    await init_db()
+    db = await aiosqlite.connect(_DB_PATH)
+    db.row_factory = aiosqlite.Row
+    try:
+        yield db
+    finally:
+        await db.close()
+
+
+async def ensure_row(db: aiosqlite.Connection, user_id: int, chat_id: int) -> None:
+    """Ensure that a score row exists for the user in the chat."""
+    await db.execute(
+        """
+        INSERT INTO scores(user_id, chat_id, points, message_cnt, last_signin)
+        VALUES (?, ?, 0, 0, NULL)
+        ON CONFLICT(user_id, chat_id) DO NOTHING
+        """,
+        (user_id, chat_id),
     )
+    await db.commit()
 
 
-def _parse_datetime(value: str | None) -> datetime | None:
-    if value is None:
-        return None
-    return datetime.fromisoformat(value)
+async def upsert_user(db: aiosqlite.Connection, user, chat_id: int) -> None:
+    """Insert or update Telegram user metadata for the chat."""
+    await db.execute(
+        """
+        INSERT INTO users(user_id, chat_id, first_name, last_name, username)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, chat_id) DO UPDATE SET
+          first_name=excluded.first_name,
+          last_name=excluded.last_name,
+          username=excluded.username
+        """,
+        (user.id, chat_id, user.first_name, user.last_name, user.username),
+    )
+    await db.commit()
+
+
+async def add_message_point(
+    db: aiosqlite.Connection, user_id: int, chat_id: int, points: int
+) -> None:
+    """Increase message counters and award points for a user."""
+    await db.execute(
+        """
+        UPDATE scores
+        SET points = points + ?, message_cnt = message_cnt + 1
+        WHERE user_id = ? AND chat_id = ?
+        """,
+        (points, user_id, chat_id),
+    )
+    await db.commit()
+
+
+async def signin(db: aiosqlite.Connection, user_id: int, chat_id: int, bonus: int) -> bool:
+    """Apply a daily sign-in bonus once per UTC day."""
+    async with db.execute(
+        "SELECT last_signin FROM scores WHERE user_id=? AND chat_id=?",
+        (user_id, chat_id),
+    ) as cursor:
+        row = await cursor.fetchone()
+    last_signin = row[0] if row else None
+    today = datetime.now(timezone.utc).date()
+    if last_signin:
+        try:
+            previous = datetime.fromisoformat(last_signin)
+        except ValueError:
+            previous = None
+        else:
+            if previous.astimezone(timezone.utc).date() == today:
+                return False
+    await db.execute(
+        """
+        UPDATE scores
+        SET points = points + ?, last_signin = ?
+        WHERE user_id = ? AND chat_id = ?
+        """,
+        (bonus, datetime.now(timezone.utc).isoformat(), user_id, chat_id),
+    )
+    await db.commit()
+    return True
+
+
+async def get_user_score(db: aiosqlite.Connection, user_id: int, chat_id: int):
+    """Return the score row for a user in a chat."""
+    async with db.execute(
+        """
+        SELECT s.points, s.message_cnt, s.last_signin,
+               u.first_name, u.last_name, u.username
+        FROM scores AS s
+        LEFT JOIN users AS u ON u.user_id = s.user_id AND u.chat_id = s.chat_id
+        WHERE s.user_id = ? AND s.chat_id = ?
+        """,
+        (user_id, chat_id),
+    ) as cursor:
+        return await cursor.fetchone()
+
+
+async def get_rank(db: aiosqlite.Connection, user_id: int, chat_id: int) -> int | None:
+    """Compute a user's rank within a chat based on points and message count."""
+    async with db.execute(
+        """
+        SELECT user_id
+        FROM scores
+        WHERE chat_id = ?
+        ORDER BY points DESC, message_cnt DESC, user_id ASC
+        """,
+        (chat_id,),
+    ) as cursor:
+        index = 1
+        async for row in cursor:
+            if row[0] == user_id:
+                return index
+            index += 1
+    return None
+
+
+async def get_top(
+    db: aiosqlite.Connection, chat_id: int, *, limit: int = 10
+) -> Iterable[aiosqlite.Row]:
+    """Return the top N score rows for a chat including user metadata."""
+    async with db.execute(
+        """
+        SELECT s.user_id, s.points, s.message_cnt,
+               u.username, u.first_name, u.last_name
+        FROM scores AS s
+        LEFT JOIN users AS u ON u.user_id = s.user_id AND u.chat_id = s.chat_id
+        WHERE s.chat_id = ?
+        ORDER BY s.points DESC, s.message_cnt DESC, s.user_id ASC
+        LIMIT ?
+        """,
+        (chat_id, limit),
+    ) as cursor:
+        return await cursor.fetchall()

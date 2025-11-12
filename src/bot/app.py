@@ -9,49 +9,57 @@ import time
 
 from telegram.ext import Application, ApplicationBuilder
 
-from .handlers import register
-from .settings import Settings
-from .settings import settings as default_settings
-from .storage import Storage
+from .handlers import register_handlers
+from .settings import TOKEN
+from .storage import init_db
 
 
-class JsonFormatter(logging.Formatter):
-    """Format logs as structured JSON records."""
+def setup_logging() -> None:
+    """Configure structured JSON logging for the bot."""
 
-    def format(self, record: logging.LogRecord) -> str:
-        payload: dict[str, object] = {
-            "ts": round(time.time(), 3),
-            "lvl": record.levelname,
-            "msg": record.getMessage(),
-            "name": record.name,
-        }
-        for key in ("chat_id", "user_id", "points"):
-            if hasattr(record, key):
-                payload[key] = getattr(record, key)
-        return json.dumps(payload, ensure_ascii=False)
+    class JsonFormatter(logging.Formatter):
+        def format(self, record: logging.LogRecord) -> str:  # type: ignore[override]
+            payload = {
+                "ts": round(time.time(), 3),
+                "lvl": record.levelname,
+                "msg": record.getMessage(),
+                "name": record.name,
+            }
+            for field in ("chat_id", "user_id", "bonus", "points"):
+                if hasattr(record, field):
+                    payload[field] = getattr(record, field)
+            return json.dumps(payload, ensure_ascii=False)
 
-
-def setup_logging(level: int = logging.INFO) -> None:
-    """Configure root logging with JSON formatting."""
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)
-    root.setLevel(level)
+    root.setLevel(logging.INFO)
 
 
-def create_application(app_settings: Settings | None = None) -> Application:
-    """Create the telegram application instance."""
-    setup_logging()
-    app_settings = app_settings or default_settings
-    storage = Storage(app_settings.db_path)
-
-    async def _post_init(application: Application) -> None:
-        await storage.initialize()
-
-    application = (
-        ApplicationBuilder().token(app_settings.telegram_token).post_init(_post_init).build()
+async def on_error(update, context) -> None:  # type: ignore[override]
+    """Log unexpected errors with structured context."""
+    chat_id = getattr(getattr(update, "effective_chat", None), "id", None)
+    user_id = getattr(getattr(update, "effective_user", None), "id", None)
+    logging.exception(
+        "unhandled_error",
+        extra={
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "error_type": type(context.error).__name__,
+            "error": str(context.error),
+        },
     )
-    register(application, storage, app_settings)
+
+
+async def create_application() -> Application:
+    """Instantiate and configure the Telegram application."""
+    setup_logging()
+    await init_db()
+    application = ApplicationBuilder().token(TOKEN).concurrent_updates(True).build()
+    await application.bot.delete_webhook(drop_pending_updates=True)
+    register_handlers(application)
+    application.add_error_handler(on_error)
+    logging.info("Bot is running...", extra={"name": "__main__"})
     return application

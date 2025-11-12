@@ -5,19 +5,23 @@ Track chat activity, award points for messages, and offer daily sign-ins for you
 ## Quick start
 1. Disable privacy mode in BotFather (`/setprivacy → Disable`) and add the bot to your group.
 2. Copy `.env.example` to `.env` and set `TELEGRAM_TOKEN`.
-3. Run locally:
+3. (Optional) Run `/chatid` in your group and copy the displayed ID into `ALLOWED_CHAT_IDS` to restrict usage.
+4. Run locally:
    ```bash
    python -m venv .venv && source .venv/bin/activate
    pip install -r requirements.txt
    make run
    ```
-4. Or start with Docker:
+5. Or start with Docker:
    ```bash
    docker compose up -d
    ```
 
 ## Available commands
 - `/start` – show help and configuration
+- `/ping` – quick health check
+- `/chatid` – print the current chat ID (useful for whitelisting)
+- `/config` – show runtime configuration values
 - `/me` – view your score summary
 - `/rank` – check your leaderboard position
 - `/top` – display the top 10 members
@@ -26,10 +30,10 @@ Track chat activity, award points for messages, and offer daily sign-ins for you
 ### Example output
 ```
 /top
-🏆 *Leaderboard*
-🥇 @Alice — *50* pts / 120 msgs
-🥈 @Bob — *40* pts / 98 msgs
-3. Charlie — *30* pts / 64 msgs
+🏆 <b>Leaderboard</b>
+🥇 @Alice — <b>50</b> pts / 120 msgs
+🥈 @Bob — <b>40</b> pts / 98 msgs
+3. <a href="tg://user?id=300">Charlie</a> — <b>30</b> pts / 64 msgs
 ```
 
 ## Configuration
@@ -42,6 +46,8 @@ Track chat activity, award points for messages, and offer daily sign-ins for you
 | `THROTTLE_SECONDS` | Cooldown window for message scoring | `5` |
 | `LANG` | Interface language | `en` |
 | `ALLOWED_CHAT_IDS` | Comma-separated chat IDs whitelist | – |
+
+`ALLOWED_CHAT_IDS` accepts a comma-separated list of group IDs. Leave it empty to allow all chats. Use the `/chatid` command after inviting the bot to a group to determine the identifier you should add.
 
 ### Logging & deployment
 - Logs are emitted as single-line JSON records that include the log level, timestamp, and
@@ -91,6 +97,9 @@ tg-group-points-bot/
 ## BotFather command menu
 ```
 start - show help
+ping - health check
+chatid - print chat id
+config - show configuration summary
 me - view my score
 rank - check my leaderboard position
 top - show the top members

@@ -14,49 +14,56 @@ load_dotenv()
 class Settings:
     """Container for runtime configuration."""
 
-    telegram_token: str
-    db_path: str = "points.db"
-    message_point: int = 1
-    daily_signin_bonus: int = 10
-    throttle_seconds: int = 5
-
-    @classmethod
-    def from_env(cls) -> Settings:
-        """Create settings from environment variables."""
-        token = os.getenv("TELEGRAM_TOKEN", "").strip()
-        db_path = os.getenv("DB_PATH", "points.db").strip() or "points.db"
-        message_point = cls._parse_int(os.getenv("MESSAGE_POINT"), default=1)
-        daily_bonus = cls._parse_int(os.getenv("DAILY_SIGNIN_BONUS"), default=10)
-        throttle_seconds = cls._parse_int(os.getenv("THROTTLE_SECONDS"), default=5)
-        instance = cls(
-            telegram_token=token,
-            db_path=db_path,
-            message_point=message_point,
-            daily_signin_bonus=daily_bonus,
-            throttle_seconds=throttle_seconds,
-        )
-        instance.validate()
-        return instance
-
-    def validate(self) -> None:
-        """Validate configuration values."""
-        if not self.telegram_token:
-            raise ValueError("TELEGRAM_TOKEN is required. Please set it in your environment.")
-        if self.message_point < 0:
-            raise ValueError("MESSAGE_POINT must be non-negative.")
-        if self.daily_signin_bonus < 0:
-            raise ValueError("DAILY_SIGNIN_BONUS must be non-negative.")
-        if self.throttle_seconds < 0:
-            raise ValueError("THROTTLE_SECONDS must be non-negative.")
-
-    @staticmethod
-    def _parse_int(value: str | None, *, default: int) -> int:
-        if value is None or not value.strip():
-            return default
-        try:
-            return int(value)
-        except ValueError as exc:  # pragma: no cover - defensive branch
-            raise ValueError(f"Invalid integer value: {value}") from exc
+    token: str
+    db_path: str
+    message_point: int
+    daily_signin_bonus: int
+    throttle_seconds: int
 
 
-settings = Settings.from_env()
+def _parse_int(value: str | None, *, default: int) -> int:
+    if value is None:
+        return default
+    value = value.strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"Invalid integer value: {value}") from exc
+
+
+def load_settings() -> Settings:
+    token = os.getenv("TELEGRAM_TOKEN", "").strip()
+    db_path = os.getenv("DB_PATH", "points.db").strip() or "points.db"
+    message_point = _parse_int(os.getenv("MESSAGE_POINT"), default=1)
+    daily_signin_bonus = _parse_int(os.getenv("DAILY_SIGNIN_BONUS"), default=10)
+    throttle_seconds = _parse_int(os.getenv("THROTTLE_SECONDS"), default=5)
+    settings = Settings(
+        token=token,
+        db_path=db_path,
+        message_point=message_point,
+        daily_signin_bonus=daily_signin_bonus,
+        throttle_seconds=throttle_seconds,
+    )
+    validate(settings)
+    return settings
+
+
+def validate(settings: Settings) -> None:
+    if not settings.token:
+        raise ValueError("TELEGRAM_TOKEN is required. Please set it in your environment.")
+    if settings.message_point < 0:
+        raise ValueError("MESSAGE_POINT must be non-negative.")
+    if settings.daily_signin_bonus < 0:
+        raise ValueError("DAILY_SIGNIN_BONUS must be non-negative.")
+    if settings.throttle_seconds < 0:
+        raise ValueError("THROTTLE_SECONDS must be non-negative.")
+
+
+settings = load_settings()
+TOKEN = settings.token
+DB_PATH = settings.db_path
+MESSAGE_POINT = settings.message_point
+DAILY_SIGNIN_BONUS = settings.daily_signin_bonus
+THROTTLE_SECONDS = settings.throttle_seconds
