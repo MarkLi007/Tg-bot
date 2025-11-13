@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Iterable
+import sqlite3
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-
-import aiosqlite
 
 from .settings import DB_PATH
 
@@ -48,27 +47,68 @@ async def init_db(db_path: str | None = None) -> None:
     async with _INIT_LOCK:
         if _INITIALIZED:
             return
-        async with aiosqlite.connect(_DB_PATH) as db:
-            await db.executescript(INIT_SQL)
-            await db.commit()
+        await asyncio.to_thread(_initialize_database, _DB_PATH)
         _INITIALIZED = True
 
 
+def _initialize_database(path: str) -> None:
+    with sqlite3.connect(path) as db:
+        db.executescript(INIT_SQL)
+        db.commit()
+
+
 @asynccontextmanager
-async def get_db() -> AsyncIterator[aiosqlite.Connection]:
+async def get_db() -> AsyncIterator[sqlite3.Connection]:
     """Yield an initialized database connection."""
     await init_db()
-    db = await aiosqlite.connect(_DB_PATH)
-    db.row_factory = aiosqlite.Row
+    db = sqlite3.connect(_DB_PATH, check_same_thread=False)
+    db.row_factory = sqlite3.Row
     try:
         yield db
     finally:
-        await db.close()
+        await asyncio.to_thread(db.close)
 
 
-async def ensure_row(db: aiosqlite.Connection, user_id: int, chat_id: int) -> None:
+async def db_execute(db: sqlite3.Connection, query: str, params: tuple = ()) -> None:
+    """Execute a query that does not return rows."""
+
+    def _exec() -> None:
+        db.execute(query, params)
+        db.commit()
+
+    await asyncio.to_thread(_exec)
+
+
+async def db_fetchone(db: sqlite3.Connection, query: str, params: tuple = ()) -> sqlite3.Row | None:
+    """Execute a query and return a single row."""
+
+    def _exec() -> sqlite3.Row | None:
+        cursor = db.execute(query, params)
+        try:
+            return cursor.fetchone()
+        finally:
+            cursor.close()
+
+    return await asyncio.to_thread(_exec)
+
+
+async def db_fetchall(db: sqlite3.Connection, query: str, params: tuple = ()) -> list[sqlite3.Row]:
+    """Execute a query and return all rows."""
+
+    def _exec() -> list[sqlite3.Row]:
+        cursor = db.execute(query, params)
+        try:
+            return cursor.fetchall()
+        finally:
+            cursor.close()
+
+    return await asyncio.to_thread(_exec)
+
+
+async def ensure_row(db: sqlite3.Connection, user_id: int, chat_id: int) -> None:
     """Ensure that a score row exists for the user in the chat."""
-    await db.execute(
+    await db_execute(
+        db,
         """
         INSERT INTO scores(user_id, chat_id, points, message_cnt, last_signin)
         VALUES (?, ?, 0, 0, NULL)
@@ -76,12 +116,12 @@ async def ensure_row(db: aiosqlite.Connection, user_id: int, chat_id: int) -> No
         """,
         (user_id, chat_id),
     )
-    await db.commit()
 
 
-async def upsert_user(db: aiosqlite.Connection, user, chat_id: int) -> None:
+async def upsert_user(db: sqlite3.Connection, user, chat_id: int) -> None:
     """Insert or update Telegram user metadata for the chat."""
-    await db.execute(
+    await db_execute(
+        db,
         """
         INSERT INTO users(user_id, chat_id, first_name, last_name, username)
         VALUES (?, ?, ?, ?, ?)
@@ -92,14 +132,14 @@ async def upsert_user(db: aiosqlite.Connection, user, chat_id: int) -> None:
         """,
         (user.id, chat_id, user.first_name, user.last_name, user.username),
     )
-    await db.commit()
 
 
 async def add_message_point(
-    db: aiosqlite.Connection, user_id: int, chat_id: int, points: int
+    db: sqlite3.Connection, user_id: int, chat_id: int, points: int
 ) -> None:
     """Increase message counters and award points for a user."""
-    await db.execute(
+    await db_execute(
+        db,
         """
         UPDATE scores
         SET points = points + ?, message_cnt = message_cnt + 1
@@ -107,16 +147,15 @@ async def add_message_point(
         """,
         (points, user_id, chat_id),
     )
-    await db.commit()
 
 
-async def signin(db: aiosqlite.Connection, user_id: int, chat_id: int, bonus: int) -> bool:
+async def signin(db: sqlite3.Connection, user_id: int, chat_id: int, bonus: int) -> bool:
     """Apply a daily sign-in bonus once per UTC day."""
-    async with db.execute(
+    row = await db_fetchone(
+        db,
         "SELECT last_signin FROM scores WHERE user_id=? AND chat_id=?",
         (user_id, chat_id),
-    ) as cursor:
-        row = await cursor.fetchone()
+    )
     last_signin = row[0] if row else None
     today = datetime.now(timezone.utc).date().isoformat()
     if last_signin == today:
@@ -134,7 +173,8 @@ async def signin(db: aiosqlite.Connection, user_id: int, chat_id: int, bonus: in
             )
             if previous_date == today:
                 return False
-    await db.execute(
+    await db_execute(
+        db,
         """
         UPDATE scores
         SET points = points + ?, last_signin = ?
@@ -142,13 +182,13 @@ async def signin(db: aiosqlite.Connection, user_id: int, chat_id: int, bonus: in
         """,
         (bonus, today, user_id, chat_id),
     )
-    await db.commit()
     return True
 
 
-async def get_user_score(db: aiosqlite.Connection, user_id: int, chat_id: int):
+async def get_user_score(db: sqlite3.Connection, user_id: int, chat_id: int):
     """Return the score row for a user in a chat."""
-    async with db.execute(
+    return await db_fetchone(
+        db,
         """
         SELECT s.points, s.message_cnt, s.last_signin,
                u.first_name, u.last_name, u.username
@@ -157,13 +197,13 @@ async def get_user_score(db: aiosqlite.Connection, user_id: int, chat_id: int):
         WHERE s.user_id = ? AND s.chat_id = ?
         """,
         (user_id, chat_id),
-    ) as cursor:
-        return await cursor.fetchone()
+    )
 
 
-async def get_rank(db: aiosqlite.Connection, user_id: int, chat_id: int) -> int | None:
+async def get_rank(db: sqlite3.Connection, user_id: int, chat_id: int) -> int | None:
     """Compute a user's rank within a chat based on points and message count."""
-    async with db.execute(
+    rows = await db_fetchall(
+        db,
         """
         SELECT user_id
         FROM scores
@@ -171,20 +211,19 @@ async def get_rank(db: aiosqlite.Connection, user_id: int, chat_id: int) -> int 
         ORDER BY points DESC, message_cnt DESC, user_id ASC
         """,
         (chat_id,),
-    ) as cursor:
-        index = 1
-        async for row in cursor:
-            if row[0] == user_id:
-                return index
-            index += 1
+    )
+    index = 1
+    for row in rows:
+        if row[0] == user_id:
+            return index
+        index += 1
     return None
 
 
-async def get_top(
-    db: aiosqlite.Connection, chat_id: int, *, limit: int = 10
-) -> Iterable[aiosqlite.Row]:
+async def get_top(db: sqlite3.Connection, chat_id: int, *, limit: int = 10) -> list[sqlite3.Row]:
     """Return the top N score rows for a chat including user metadata."""
-    async with db.execute(
+    return await db_fetchall(
+        db,
         """
         SELECT s.user_id, s.points, s.message_cnt,
                u.username, u.first_name, u.last_name
@@ -195,5 +234,4 @@ async def get_top(
         LIMIT ?
         """,
         (chat_id, limit),
-    ) as cursor:
-        return await cursor.fetchall()
+    )

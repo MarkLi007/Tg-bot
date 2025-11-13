@@ -14,6 +14,8 @@ from .lang import t
 from .settings import DAILY_SIGNIN_BONUS, MESSAGE_POINT, THROTTLE_SECONDS
 from .storage import (
     add_message_point,
+    db_execute,
+    db_fetchone,
     ensure_row,
     get_db,
     get_rank,
@@ -97,7 +99,8 @@ async def cmd_signin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     async with get_db() as db:
         await ensure_row(db, user.id, chat.id)
         await upsert_user(db, user, chat.id)
-        row = await db.execute_fetchone(
+        row = await db_fetchone(
+            db,
             "SELECT last_signin FROM scores WHERE user_id=? AND chat_id=?",
             (user.id, chat.id),
         )
@@ -106,11 +109,11 @@ async def cmd_signin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if last == today:
             await message.reply_text(t("signin_dup"), parse_mode=ParseMode.HTML)
             return
-        await db.execute(
+        await db_execute(
+            db,
             "UPDATE scores SET points = points + ?, last_signin = ? WHERE user_id=? AND chat_id=?",
             (DAILY_SIGNIN_BONUS, today, user.id, chat.id),
         )
-        await db.commit()
     logging.info(
         "signin_ok",
         extra={"chat_id": chat.id, "user_id": user.id, "bonus": DAILY_SIGNIN_BONUS},
@@ -235,9 +238,11 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     message = update.effective_message
     chat = update.effective_chat
     user = update.effective_user
-    if not all((message, chat, user)):
+    if message is None or chat is None:
         return
-    if message.from_user and message.from_user.is_bot:
+    if user is None or user.is_bot:
+        return
+    if getattr(message, "sender_chat", None):
         return
     if chat.type not in GROUP_TYPES:
         return
