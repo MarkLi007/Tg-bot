@@ -8,13 +8,7 @@ import os
 
 from telegram import Update
 from telegram.constants import ChatType, ParseMode
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from .lang import t
 from .settings import DAILY_SIGNIN_BONUS, MESSAGE_POINT, THROTTLE_SECONDS
@@ -25,7 +19,6 @@ from .storage import (
     get_rank,
     get_top,
     get_user_score,
-    signin,
     upsert_user,
 )
 from .utils import Throttle, html_escape, mention_from_row_html
@@ -99,13 +92,25 @@ async def cmd_signin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     chat = update.effective_chat
     if not all((message, user, chat)):
         return
+    if chat.type not in GROUP_TYPES:
+        return
     async with get_db() as db:
         await ensure_row(db, user.id, chat.id)
         await upsert_user(db, user, chat.id)
-        applied = await signin(db, user.id, chat.id, DAILY_SIGNIN_BONUS)
-    if not applied:
-        await message.reply_text(t("signin_dup"), parse_mode=ParseMode.HTML)
-        return
+        row = await db.execute_fetchone(
+            "SELECT last_signin FROM scores WHERE user_id=? AND chat_id=?",
+            (user.id, chat.id),
+        )
+        last = row[0] if row else None
+        today = dt.datetime.utcnow().date().isoformat()
+        if last == today:
+            await message.reply_text(t("signin_dup"), parse_mode=ParseMode.HTML)
+            return
+        await db.execute(
+            "UPDATE scores SET points = points + ?, last_signin = ? WHERE user_id=? AND chat_id=?",
+            (DAILY_SIGNIN_BONUS, today, user.id, chat.id),
+        )
+        await db.commit()
     logging.info(
         "signin_ok",
         extra={"chat_id": chat.id, "user_id": user.id, "bonus": DAILY_SIGNIN_BONUS},
@@ -124,6 +129,8 @@ async def cmd_me(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
     if not all((message, user, chat)):
         return
+    if chat.type not in GROUP_TYPES:
+        return
     async with get_db() as db:
         await ensure_row(db, user.id, chat.id)
         await upsert_user(db, user, chat.id)
@@ -132,14 +139,17 @@ async def cmd_me(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await message.reply_text(t("no_record"), parse_mode=ParseMode.HTML)
         return
     last = row["last_signin"] if "last_signin" in row.keys() else row[2]
+    last_value = "—"
     if last:
         try:
-            last_dt = dt.datetime.fromisoformat(last).astimezone(dt.timezone.utc)
-            last_value = last_dt.strftime("%Y-%m-%d")
+            parsed = dt.datetime.fromisoformat(last)
         except ValueError:
             last_value = html_escape(last)
-    else:
-        last_value = "—"
+        else:
+            if parsed.tzinfo is None:
+                last_value = parsed.date().isoformat()
+            else:
+                last_value = parsed.astimezone(dt.timezone.utc).date().isoformat()
     await message.reply_text(
         t(
             "me",
@@ -160,6 +170,8 @@ async def cmd_rank(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     chat = update.effective_chat
     if not all((message, user, chat)):
+        return
+    if chat.type not in GROUP_TYPES:
         return
     async with get_db() as db:
         await ensure_row(db, user.id, chat.id)
@@ -188,6 +200,8 @@ async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
     if not all((message, user, chat)):
         return
+    if chat.type not in GROUP_TYPES:
+        return
     async with get_db() as db:
         await ensure_row(db, user.id, chat.id)
         await upsert_user(db, user, chat.id)
@@ -196,7 +210,7 @@ async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await message.reply_text(t("no_record"), parse_mode=ParseMode.HTML)
         return
     medals = ["🥇", "🥈", "🥉"]
-    lines = [t("top_title")]
+    lines: list[str] = []
     for idx, row in enumerate(rows, start=1):
         medal = medals[idx - 1] if idx <= len(medals) else f"{idx}."
         mention = mention_from_row_html(
@@ -209,7 +223,7 @@ async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"{medal} {mention} — <b>{int(row['points'])}</b> pts / {int(row['message_cnt'])} msgs"
         )
     await message.reply_text(
-        "\n".join(lines),
+        t("top_title") + "\n" + "\n".join(lines),
         parse_mode=ParseMode.HTML,
         disable_web_page_preview=True,
     )
@@ -229,23 +243,35 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     if not THROTTLE.should_allow(user.id):
         return
+    thread_id = getattr(message, "message_thread_id", None)
+    is_topic = bool(getattr(message, "is_topic_message", False))
     async with get_db() as db:
         await ensure_row(db, user.id, chat.id)
         await upsert_user(db, user, chat.id)
         await add_message_point(db, user.id, chat.id, MESSAGE_POINT)
     logging.info(
         "message_scored",
-        extra={"chat_id": chat.id, "user_id": user.id, "points": MESSAGE_POINT},
+        extra={
+            "chat_id": chat.id,
+            "user_id": user.id,
+            "points": MESSAGE_POINT,
+            "thread_id": thread_id,
+            "is_topic": is_topic,
+            "delta": MESSAGE_POINT,
+        },
     )
 
 
-async def guard(update: Update) -> bool:
-    """Return True if the update is allowed to proceed."""
+def allowed(update: Update) -> bool:
+    """Return True if the update passes chat whitelist checks."""
     chat = update.effective_chat
     if chat is None:
-        return False
-    if chat.type not in GROUP_TYPES:
         return False
     if ALLOWED_CHAT_IDS and chat.id not in ALLOWED_CHAT_IDS:
         return False
     return True
+
+
+async def guard(update: Update) -> bool:
+    """Return True if the update is allowed to proceed."""
+    return allowed(update)

@@ -25,7 +25,17 @@ def setup_logging() -> None:
                 "msg": record.getMessage(),
                 "name": record.name,
             }
-            for field in ("chat_id", "user_id", "bonus", "points"):
+            for field in (
+                "chat_id",
+                "user_id",
+                "bonus",
+                "points",
+                "thread_id",
+                "is_topic",
+                "delta",
+                "error_type",
+                "error",
+            ):
                 if hasattr(record, field):
                     payload[field] = getattr(record, field)
             return json.dumps(payload, ensure_ascii=False)

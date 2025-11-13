@@ -17,12 +17,9 @@ TEXTS = {
     ),
     "no_record": "You have no score yet. Start chatting to earn points!",
     "signin_ok": "✅ Sign-in successful! You earned <b>{bonus}</b> points.",
-    "signin_dup": "You already signed in today. Come back tomorrow!",
+    "signin_dup": "You have already signed in today in this group. Come back tomorrow!",
     "me": (
-        "👤 {name}\n"
-        "🏅 Points: <b>{points}</b>\n"
-        "💬 Messages: {msgs}\n"
-        "🗓️ Last sign-in (UTC): {last}"
+        "👤 {name}\n🏅 Points: <b>{points}</b>\n💬 Messages: {msgs}\n🗓️ Last sign-in (UTC): {last}"
     ),
     "rank": "Your current ranking: <b>#{rank}</b>\nPoints: <b>{points}</b>",
     "top_title": "🏆 <b>Leaderboard</b>",

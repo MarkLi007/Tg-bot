@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import AsyncIterator, Iterable
 
 import aiosqlite
 
@@ -118,14 +118,21 @@ async def signin(db: aiosqlite.Connection, user_id: int, chat_id: int, bonus: in
     ) as cursor:
         row = await cursor.fetchone()
     last_signin = row[0] if row else None
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(timezone.utc).date().isoformat()
+    if last_signin == today:
+        return False
     if last_signin:
         try:
             previous = datetime.fromisoformat(last_signin)
         except ValueError:
             previous = None
-        else:
-            if previous.astimezone(timezone.utc).date() == today:
+        if previous is not None:
+            previous_date = (
+                (previous if previous.tzinfo is None else previous.astimezone(timezone.utc))
+                .date()
+                .isoformat()
+            )
+            if previous_date == today:
                 return False
     await db.execute(
         """
@@ -133,7 +140,7 @@ async def signin(db: aiosqlite.Connection, user_id: int, chat_id: int, bonus: in
         SET points = points + ?, last_signin = ?
         WHERE user_id = ? AND chat_id = ?
         """,
-        (bonus, datetime.now(timezone.utc).isoformat(), user_id, chat_id),
+        (bonus, today, user_id, chat_id),
     )
     await db.commit()
     return True

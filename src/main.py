@@ -6,6 +6,18 @@ import asyncio
 
 from bot.app import create_application
 
+
+async def main() -> None:
+    application = await create_application()
+    async with application:
+        await application.start()
+        await application.updater.start_polling(allowed_updates=None)
+        try:
+            await asyncio.Future()
+        finally:
+            await application.updater.stop()
+            await application.stop()
+
+
 if __name__ == "__main__":
-    application = asyncio.run(create_application())
-    application.run_polling(allowed_updates=None, drop_pending_updates=True)
+    asyncio.run(main())

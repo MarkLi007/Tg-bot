@@ -65,6 +65,9 @@ async def test_signin_only_once_per_day(monkeypatch: pytest.MonkeyPatch) -> None
         await storage.upsert_user(db, user, 100)
         applied = await storage.signin(db, user.id, 100, bonus=10)
         assert applied is True
+        row = await storage.get_user_score(db, user.id, 100)
+        assert row is not None
+        assert row["last_signin"] == "2024-01-01"
         applied_again = await storage.signin(db, user.id, 100, bonus=10)
         assert applied_again is False
 
